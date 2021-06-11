@@ -17,4 +17,4 @@
 
 """ Module init """
 
-from plugins.auth_oidc.module import Module
+from .module import Module
