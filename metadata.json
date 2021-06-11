@@ -1,0 +1,8 @@
+{
+  "name": "Auth OpenID Plugin",
+  "version": "0.3",
+  "module": "plugins.auth_oidc",
+  "extract": false,
+  "depends_on": ["auth_root"],
+  "init_after": []
+}
