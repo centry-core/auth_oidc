@@ -1,6 +1,3 @@
-#!/usr/bin/python3
-# coding=utf-8
-
 #   Copyright 2021 getcarrier.io
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
@@ -81,7 +78,7 @@ class Module(module.ModuleModel):
 
     def deinit(self):  # pylint: disable=R0201
         """ De-init module """
-        log.info('De-initializing module auth_root')
+        log.info('De-initializing module auth_oidc')
 
     def login(self):
         return redirect(self._auth_request(scope="openid groups"), 302)
