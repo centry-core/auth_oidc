@@ -135,7 +135,9 @@ class Module(module.ModuleModel):
             session["X-Forwarded-Uri"] = f"/token?id={access_token_resp['refresh_token']}"
         redirect_to = self.redirect_url
         clear_session(session)
-        session["name"] = "auth"
+        session["name"] = self.context.app.session_cookie_name
+        session["auth_cookie"] = flask.request.cookies.get(session["name"], "")
+        #
         session["state"] = session_state
         session["nonce"] = session_nonce
         session["auth_attributes"] = id_token
