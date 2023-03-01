@@ -204,7 +204,7 @@ class Module(module.ModuleModel):
         auth_sessionindex = oidc_token["id_token"]
         #
         if "exp" not in id_data:
-            auth_exp = datetime.datetime.now()+datetime.timedelta(seconds=86400)  # 24h
+            auth_exp = datetime.datetime.now() + datetime.timedelta(seconds=86400)  # 24h
         else:
             auth_exp = datetime.datetime.fromtimestamp(id_data["exp"])
         #
@@ -216,6 +216,24 @@ class Module(module.ModuleModel):
         except:
             auth_user_id = None
         #
+        d = {'done': True,
+             'error': '',
+             'expiration': datetime.datetime(2023, 1, 31, 11, 43, 39),
+             'provider': 'oidc',
+             'provider_attr': {
+                 'nameid': 'admin',
+                 'attributes': {
+                     'jti': '46a62227-849d-4bb7-86a9-fe4f402371f6', 'exp': 1675165419,
+                     'nbf': 0, 'iat': 1675154619,
+                     'iss': 'http://192.168.100.13/auth/realms/carrier', 'aud': 'carrier-oidc',
+                     'sub': '31f6b97d-4e42-4816-b4bc-4e5b1bc3b181', 'typ': 'ID',
+                     'azp': 'carrier-oidc', 'auth_time': 1675154619,
+                     'session_state': '73a629cd-6b2d-4049-aef0-16f0252f3e41', 'acr': '1',
+                     'email_verified': True, 'groups': ['/BSS', '/Carrier', '/EPAM'],
+                     'preferred_username': 'admin'},
+                 'sessionindex': 'eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJyTVBZMW1hT1hCX3FZbERWNXVaa0xlZjd4MzZnRktzUmVIVUNUZ2VZTG5jIn0.eyJqdGkiOiI0NmE2MjIyNy04NDlkLTRiYjctODZhOS1mZTRmNDAyMzcxZjYiLCJleHAiOjE2NzUxNjU0MTksIm5iZiI6MCwiaWF0IjoxNjc1MTU0NjE5LCJpc3MiOiJodHRwOi8vMTkyLjE2OC4xMDAuMTMvYXV0aC9yZWFsbXMvY2FycmllciIsImF1ZCI6ImNhcnJpZXItb2lkYyIsInN1YiI6IjMxZjZiOTdkLTRlNDItNDgxNi1iNGJjLTRlNWIxYmMzYjE4MSIsInR5cCI6IklEIiwiYXpwIjoiY2Fycmllci1vaWRjIiwiYXV0aF90aW1lIjoxNjc1MTU0NjE5LCJzZXNzaW9uX3N0YXRlIjoiNzNhNjI5Y2QtNmIyZC00MDQ5LWFlZjAtMTZmMDI1MmYzZTQxIiwiYWNyIjoiMSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJncm91cHMiOlsiL0JTUyIsIi9DYXJyaWVyIiwiL0VQQU0iXSwicHJlZmVycmVkX3VzZXJuYW1lIjoiYWRtaW4ifQ.WNvZbvqnLOyLsHNwTdd6QwPus_1k342cOQyTg9I0Cs8eddF7fP_-RmnsJ_icjN_v379mih5HvryxMWVhkL7YNItGg_y3Y-E7e26XxifCOmHIorZvEI3fY57fzSIDommzWni8OWuxJSoH9lmTXsFTnMgtLXJV4FJ9XLXLgnh1edc2pA2sC8yl6QIgG8aQUO834LTBNT2c6xkYZrYU41tsT31SdZ_5ooknOnen4UaR17QC3JGS5TQmWtgWgbKfgel0UG_bWpNByqeQMeFLyVl34a1ZapC4BBS6sGusAGwMSX6ZJaYvfsHkmk1DLWURpzOOIAOKLiHmPGenH_qz8EIpuA'},
+             'user_id': None
+             }
         auth_ctx = auth.get_auth_context()
         auth_ctx["done"] = auth_ok
         auth_ctx["error"] = ""
