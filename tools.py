@@ -15,6 +15,30 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 
-""" Module init """
+""" Tools """
 
-from .module import Module
+import uuid
+
+import jwt  # pylint: disable=E0401
+
+
+def generate_state_id(module):
+    """ Make and sign state id """
+    state_uuid = str(uuid.uuid4())
+    return state_uuid, jwt.encode(
+        {"uuid": state_uuid},
+        module.context.app.secret_key,
+        algorithm="HS512",
+    )
+
+
+def get_state_id(module, target_state):
+    """ Verify and get state UUID """
+    try:
+        state_data = jwt.decode(
+            target_state, module.context.app.secret_key, algorithms=["HS512"]
+        )
+    except:
+        raise ValueError("Invalid state")
+    #
+    return state_data["uuid"]

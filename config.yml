@@ -1,20 +1,11 @@
-endpoints:
-  root: "/forward-auth/oidc"
-login:
-  handler_url: "${APP_HOST}/forward-auth/oidc/login"
-  default_redirect_url: "${APP_HOST}/"
-logout:
-  default_redirect_url: "${APP_HOST}/"
-  allowed_redirect_urls:
-    - ${APP_HOST}/
-    - "/forward-auth/token/redirect"
-debug: true
-issuer: "${APP_HOST}/auth/realms/carrier"
-registration:
-  client_id: carrier-oidc
-  client_secret: "${KEYCLOAK_SECRET}"
-  redirect_uris:
-    - "${APP_HOST}/forward-auth/oidc"
-    - "${APP_HOST}/forward-auth/oidc/callback"
-  post_logout_redirect_uris:
-    - "${APP_HOST}"
+# url_prefix: "/oidc"
+
+authorization_endpoint: ""
+token_endpoint: ""
+userinfo_endpoint: ""
+end_session_endpoint: ""
+
+client_id: ""
+client_secret: ""
+
+# issuer: ""

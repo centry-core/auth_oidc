@@ -1,4 +1,7 @@
-#   Copyright 2021 getcarrier.io
+#!/usr/bin/python3
+# coding=utf-8
+
+#   Copyright 2022 getcarrier.io
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -13,183 +16,305 @@
 #   limitations under the License.
 
 """ Module """
-import json
-from typing import Optional
 
-import flask  # pylint: disable=E0401
-import jinja2  # pylint: disable=E0401
-from flask import redirect, request, session
-from oic import rndstr
-from oic.oauth2 import GrantError
-from oic.oic.message import AuthorizationResponse
+import json
+import time
+import uuid
+import base64
+import urllib
+import textwrap
+import datetime
+
+import requests
+import flask  # pylint: disable=E0611,E0401
+import jwt  # pylint: disable=E0401
 
 from pylon.core.tools import log  # pylint: disable=E0611,E0401
+from pylon.core.tools import web  # pylint: disable=E0611,E0401
 from pylon.core.tools import module  # pylint: disable=E0611,E0401
 
-from .auth_handlers.basic import BasicAuthHandler
-from .auth_handlers.bearer import BearerAuthHandler
-from .utils.oidc_client import create_oidc_client, clear_session
+from tools import auth
+
+from . import tools
 
 
 class Module(module.ModuleModel):
     """ Pylon module """
 
-    def __init__(self, settings, root_path, context):
-        self.settings = settings
-        self.root_path = root_path
+    def __init__(self, context, descriptor):
         self.context = context
+        self.descriptor = descriptor
 
-        self.rpc_prefix = None
-        self.root_settings = None
+    #
+    # Module
+    #
 
     def init(self):
         """ Init module """
-        log.info('Initializing module auth_oidc')
-        _, _, root_module = self.context.module_manager.get_module("auth_root")
-        self.root_settings = root_module.settings
-        self.rpc_prefix = self.root_settings['rpc_manager']['prefix']['root']
-
-        auth_handlers = (BasicAuthHandler, BearerAuthHandler)
-        for auth_handler in auth_handlers:
-            handler = auth_handler(
-                issuer=self.settings['issuer'],
-                client_id=self.settings['registration']['client_id'],
-                client_secret=self.settings['registration']['client_secret']
-            )
-            self.context.rpc_manager.register_function(
-                func=handler.main,
-                name=f'{self.rpc_prefix}{handler.KEY_NAME}'
-            )
-            log.debug(f'Auth handler {str(auth_handler)} registered in rpc_manager under name {self.rpc_prefix}{handler.KEY_NAME}')
-
-        bp = flask.Blueprint(
-            'auth_oidc', 'plugins.auth_oidc',
-            root_path=self.root_path,
-            url_prefix=f'{self.context.url_prefix}/{self.settings["endpoints"]["root"]}/'
+        log.info("Initializing module")
+        # Init blueprint
+        self.descriptor.init_blueprint(
+            url_prefix=self.descriptor.config.get("url_prefix", None)
         )
-        bp.add_url_rule('/login', 'login', self.login)
-        bp.add_url_rule('/token', 'token', self.token)
-        bp.add_url_rule('/token/redirect', 'new_token', self.new_token)
-        bp.add_url_rule('/logout', 'logout', self.logout)
-        bp.add_url_rule('/callback', 'callback', self.callback)
-
-        # Register in app
-        self.context.app.register_blueprint(bp)
+        # Register auth provider
+        self.context.rpc_manager.call.auth_register_auth_provider(
+            "oidc",
+            login_route="auth_oidc.login",
+            logout_route="auth_oidc.logout",
+        )
+        #
+        # metadata = requests.get(self.descriptor.config["issuer"]).json()
+        # log.info("[Metadata]: %s", metadata)
 
     def deinit(self):  # pylint: disable=R0201
         """ De-init module """
-        log.info('De-initializing module auth_oidc')
+        log.info("De-initializing module")
+        # Unregister auth provider
+        self.context.rpc_manager.call.auth_unregister_auth_provider("oidc")
 
+    #
+    # Routes
+    #
+
+    @web.route("/login")
     def login(self):
-        return redirect(self._auth_request(scope="openid groups"), 302)
-
-    def token(self):
-        return redirect(self._do_logout(to="/forward-auth/oidc/token/redirect"))
-
-    def new_token(self):
-        return redirect(self._auth_request(scope="openid offline_access groups"))
-
-    def logout(self):
-        logout_url = self._do_logout()
-        return redirect(logout_url, 302)
-
-    def get_client(self):
-        return create_oidc_client(
-            self.settings["issuer"],
-            self.settings["registration"]
+        """ Login """
+        target_token = flask.request.args.get("target_to", "")
+        #
+        if "auth_oidc" not in flask.session:
+            flask.session["auth_oidc"] = dict()
+        #
+        while True:
+            state_uuid, target_state = tools.generate_state_id(self)
+            if state_uuid not in flask.session["auth_oidc"]:
+                break
+        #
+        flask.session["auth_oidc"][state_uuid] = dict()
+        flask.session["auth_oidc"][state_uuid]["target_token"] = target_token
+        flask.session.modified = True
+        #
+        return self.descriptor.render_template(
+            "redirect.html",
+            action=self.descriptor.config["authorization_endpoint"],
+            parameters=[
+                {
+                    "name": "response_type",
+                    "value": "code",
+                },
+                {
+                    "name": "client_id",
+                    "value": self.descriptor.config["client_id"],
+                },
+                {
+                    "name": "redirect_uri",
+                    "value": flask.url_for("auth_oidc.login_callback"),
+                },
+                {
+                    "name": "scope",
+                    "value": "openid profile email",
+                },
+                {
+                    "name": "state",
+                    "value": target_state,
+                },
+            ],
         )
 
-    def _auth_request(self, scope="openid", redirect_uri="/callback", response_type="code"):
-        session["state"] = rndstr()
-        session["nonce"] = rndstr()
-        client = self.get_client()
-        auth_req = client.construct_AuthorizationRequest(request_args={
-            "client_id": client.client_id,
-            "response_type": response_type,
-            "scope": scope,
-            "state": session["state"],
-            "nonce": session["nonce"],
-            "redirect_uri": f"{client.registration_response['redirect_uris'][0]}{redirect_uri}",
-        })
-        login_url = auth_req.request(client.authorization_endpoint)
-        return login_url
-
-    def callback(self):
-        client = self.get_client()
-        auth_resp = client.parse_response(
-            AuthorizationResponse,
-            info=json.dumps(request.args.to_dict()),
-            sformat="json"
-        )
-        if "state" not in session or auth_resp["state"] != session["state"]:
-            return redirect(self.root_settings["endpoints"]["access_denied"], 302)
-        access_token_resp = client.do_access_token_request(
-            state=auth_resp["state"],
-            request_args={"code": auth_resp["code"]},
-            authn_method="client_secret_basic"
-        )
-        session_state = session.pop("state")
-        session_nonce = session.pop("nonce")
-        id_token = dict(access_token_resp["id_token"])
-        if access_token_resp["refresh_expires_in"] == 0:
-            session["X-Forwarded-Uri"] = f"/token?id={access_token_resp['refresh_token']}"
-        redirect_to = self.redirect_url
-        clear_session(session)
-        session["name"] = self.context.app.session_cookie_name
-        session["auth_cookie"] = flask.request.cookies.get(session["name"], "")
+    @web.route("/login_callback")
+    def login_callback(self):  # pylint: disable=R0912,R0914,R0915
+        """ Login callback """
+        log.info("GET arguments: %s", flask.request.args)
         #
-        session["state"] = session_state
-        session["nonce"] = session_nonce
-        session["auth_attributes"] = id_token
-        session["auth"] = True
-        session["auth_errors"] = []
-        session["auth_nameid"] = ""
-        session["auth_sessionindex"] = ""
+        if "state" not in flask.request.args:
+            log.error("No state in OIDC callback")
+            return auth.access_denied_reply()
         #
-        if self.settings["debug"]:
-            log.warning("Callback redirect URL: %s", redirect_to)
+        target_state = flask.request.args["state"]
         #
-        return redirect(redirect_to, 302)
-
-    @property
-    def redirect_url(self) -> str:
-        for header in ("X-Forwarded-Proto", "X-Forwarded-Host", "X-Forwarded-Port"):
-            if header not in session:
-                if "X-Forwarded-Uri" not in session:
-                    return self.settings['login']["default_redirect_url"]
-                return session.pop("X-Forwarded-Uri")
-        proto = session.pop("X-Forwarded-Proto")
-        host = session.pop("X-Forwarded-Host")
-        port = session.pop("X-Forwarded-Port")
-        if (proto == "http" and port != "80") or (proto == "https" and port != "443"):
-            port = f":{port}"
+        try:
+            state_uuid = tools.get_state_id(self, target_state)
+            if state_uuid not in flask.session["auth_oidc"]:
+                raise ValueError("Unknown state")
+        except:  # pylint: disable=W0702
+            log.error("Invalid state")
+            return auth.access_denied_reply()
+        #
+        oidc_state = flask.session["auth_oidc"].pop(state_uuid)
+        flask.session.modified = True
+        #
+        target_token = oidc_state.get("target_token", "")
+        #
+        if "code" not in flask.request.args:
+            log.error("No code in OIDC callback")
+            return auth.access_denied_reply()
+        #
+        oidc_code = flask.request.args["code"]
+        #
+        try:
+            oidc_token = requests.post(
+                self.descriptor.config["token_endpoint"],
+                data={
+                    "grant_type": "authorization_code",
+                    "code": oidc_code,
+                    "redirect_uri": flask.url_for("auth_oidc.login_callback"),
+                },
+                auth=(
+                    self.descriptor.config["client_id"],
+                    self.descriptor.config["client_secret"],
+                ),
+                verify=self.descriptor.config.get("token_endpoint_verify", True),
+            ).json()
+        except:  # pylint: disable=W0702
+            log.error("Failed to get token")
+            return auth.access_denied_reply()
+        #
+        log.info("Token: %s", oidc_token)
+        #
+        if "error" in oidc_token:
+            log.error("Error in OIDC token: %s", oidc_token.get("error_description", "unknown"))
+            return auth.access_denied_reply()
+        #
+        if "id_token" not in oidc_token:
+            log.error("Invalid OIDC token: no id_tokeb")
+            return auth.access_denied_reply()
+        #
+        id_data = jwt.decode(oidc_token["id_token"], options={"verify_signature": False})
+        #
+        log.info("ID data: %s", id_data)
+        #
+        if "sub" not in id_data:
+            log.error("Invalid ID token: no sub")
+            return auth.access_denied_reply()
+        #
+        oidc_sub = id_data["sub"]
+        #
+        auth_ok = True
+        # log.info("Auth: %s", auth_ok)
+        #
+        if "preferred_username" not in id_data:
+            auth_name = oidc_sub
         else:
-            port = ""
-        # uri = session.pop("X-Forwarded-Uri")
+            auth_name = id_data["preferred_username"]
+        # log.info("User: %s", auth_name)
+        #
+        auth_attributes = id_data
+        #
+        # log.info("Auth attributes: %s", auth_attributes)
+        #
+        auth_sessionindex = oidc_token["id_token"]
+        #
+        if "exp" not in id_data:
+            auth_exp = datetime.datetime.now() + datetime.timedelta(seconds=86400)  # 24h
+        else:
+            auth_exp = datetime.datetime.fromtimestamp(id_data["exp"])
+        #
         try:
-            uri = session.pop("X-Forwarded-Uri")
-        except KeyError:
-            uri = ''
-            log.warning(f'NO X-Forwarded-Uri in session found, redirecting to root')
-        return f"{proto}://{host}{port}{uri}"
+            auth_user_id = \
+                self.context.rpc_manager.call.auth_get_user_from_provider(
+                    auth_name
+                )["id"]
+        except:
+            auth_user_id = None
+        #
+        d = {'done': True,
+             'error': '',
+             'expiration': datetime.datetime(2023, 1, 31, 11, 43, 39),
+             'provider': 'oidc',
+             'provider_attr': {
+                 'nameid': 'admin',
+                 'attributes': {
+                     'jti': '46a62227-849d-4bb7-86a9-fe4f402371f6', 'exp': 1675165419,
+                     'nbf': 0, 'iat': 1675154619,
+                     'iss': 'http://192.168.100.13/auth/realms/carrier', 'aud': 'carrier-oidc',
+                     'sub': '31f6b97d-4e42-4816-b4bc-4e5b1bc3b181', 'typ': 'ID',
+                     'azp': 'carrier-oidc', 'auth_time': 1675154619,
+                     'session_state': '73a629cd-6b2d-4049-aef0-16f0252f3e41', 'acr': '1',
+                     'email_verified': True, 'groups': ['/BSS', '/Carrier', '/EPAM'],
+                     'preferred_username': 'admin'},
+                 'sessionindex': 'eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJyTVBZMW1hT1hCX3FZbERWNXVaa0xlZjd4MzZnRktzUmVIVUNUZ2VZTG5jIn0.eyJqdGkiOiI0NmE2MjIyNy04NDlkLTRiYjctODZhOS1mZTRmNDAyMzcxZjYiLCJleHAiOjE2NzUxNjU0MTksIm5iZiI6MCwiaWF0IjoxNjc1MTU0NjE5LCJpc3MiOiJodHRwOi8vMTkyLjE2OC4xMDAuMTMvYXV0aC9yZWFsbXMvY2FycmllciIsImF1ZCI6ImNhcnJpZXItb2lkYyIsInN1YiI6IjMxZjZiOTdkLTRlNDItNDgxNi1iNGJjLTRlNWIxYmMzYjE4MSIsInR5cCI6IklEIiwiYXpwIjoiY2Fycmllci1vaWRjIiwiYXV0aF90aW1lIjoxNjc1MTU0NjE5LCJzZXNzaW9uX3N0YXRlIjoiNzNhNjI5Y2QtNmIyZC00MDQ5LWFlZjAtMTZmMDI1MmYzZTQxIiwiYWNyIjoiMSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJncm91cHMiOlsiL0JTUyIsIi9DYXJyaWVyIiwiL0VQQU0iXSwicHJlZmVycmVkX3VzZXJuYW1lIjoiYWRtaW4ifQ.WNvZbvqnLOyLsHNwTdd6QwPus_1k342cOQyTg9I0Cs8eddF7fP_-RmnsJ_icjN_v379mih5HvryxMWVhkL7YNItGg_y3Y-E7e26XxifCOmHIorZvEI3fY57fzSIDommzWni8OWuxJSoH9lmTXsFTnMgtLXJV4FJ9XLXLgnh1edc2pA2sC8yl6QIgG8aQUO834LTBNT2c6xkYZrYU41tsT31SdZ_5ooknOnen4UaR17QC3JGS5TQmWtgWgbKfgel0UG_bWpNByqeQMeFLyVl34a1ZapC4BBS6sGusAGwMSX6ZJaYvfsHkmk1DLWURpzOOIAOKLiHmPGenH_qz8EIpuA'},
+             'user_id': None
+             }
+        auth_ctx = auth.get_auth_context()
+        auth_ctx["done"] = auth_ok
+        auth_ctx["error"] = ""
+        auth_ctx["expiration"] = auth_exp
+        auth_ctx["provider"] = "oidc"
+        auth_ctx["provider_attr"]["nameid"] = auth_name
+        auth_ctx["provider_attr"]["attributes"] = auth_attributes
+        auth_ctx["provider_attr"]["sessionindex"] = auth_sessionindex
+        auth_ctx["user_id"] = auth_user_id
+        auth.set_auth_context(auth_ctx)
+        #
+        log.info("Context: %s", auth_ctx)
+        #
+        return auth.access_success_redirect(target_token)
 
-    def _do_logout(self, to: Optional[str] = None) -> str:
-        if not to:
-            to = request.args.get('to', self.settings["login"]["handler_url"])
-        return_to = self.settings["logout"]["default_redirect_url"]
-        if to is not None and to in self.settings["logout"]["allowed_redirect_urls"]:
-            return_to = to
-        client = self.get_client()
+    @web.route("/logout")
+    def logout(self):
+        """ Logout """
+        target_token = flask.request.args.get("target_to", "")
+        auth_ctx = auth.get_auth_context()
+        #
+        if "auth_oidc" not in flask.session:
+            flask.session["auth_oidc"] = dict()
+        #
+        while True:
+            state_uuid, target_state = tools.generate_state_id(self)
+            if state_uuid not in flask.session["auth_oidc"]:
+                break
+        #
+        flask.session["auth_oidc"][state_uuid] = dict()
+        flask.session["auth_oidc"][state_uuid]["target_token"] = target_token
+        flask.session.modified = True
+        #
+        url_params = urllib.parse.urlencode({
+            "id_token_hint": auth_ctx["provider_attr"].get("sessionindex", ""),
+            "post_logout_redirect_uri": flask.url_for("auth_oidc.logout_callback"),
+            "state": target_state,
+        })
+        return flask.redirect(f'{self.descriptor.config["end_session_endpoint"]}?{url_params}')
+        #
+        # return self.descriptor.render_template(
+        #     "redirect.html",
+        #     action=self.descriptor.config["end_session_endpoint"],
+        #     parameters=[
+        #         {
+        #             "name": "id_token_hint",
+        #             "value": auth_ctx["provider_attr"].get("sessionindex", ""),
+        #         },
+        #         {
+        #             "name": "post_logout_redirect_uri",
+        #             "value": flask.url_for("auth_oidc.logout_callback"),
+        #         },
+        #         {
+        #             "name": "state",
+        #             "value": target_state,
+        #         },
+        #     ],
+        # )
+
+    @web.route("/logout_callback")
+    def logout_callback(self):  # pylint: disable=R0912,R0914,R0915
+        """ Logout callback """
+        log.info("GET arguments: %s", flask.request.args)
+        #
+        if "state" not in flask.request.args:
+            log.error("No state in OIDC callback")
+            return auth.access_denied_reply()
+        #
+        target_state = flask.request.args["state"]
+        #
         try:
-            end_req = client.construct_EndSessionRequest(
-                state=session.get('state'),
-                request_args={"redirect_uri": return_to}
-            )
-        except GrantError:
-            clear_session(session)
-            return f"{client.end_session_endpoint}?redirect_uri={return_to}"
-        logout_url = end_req.request(client.end_session_endpoint)
-        if self.settings["debug"]:
-            log.warning("Logout URL: %s", logout_url)
-        clear_session(session)
-        return logout_url
+            state_uuid = tools.get_state_id(self, target_state)
+            if state_uuid not in flask.session["auth_oidc"]:
+                raise ValueError("Unknown state")
+        except:  # pylint: disable=W0702
+            log.error("Invalid state")
+            return auth.access_denied_reply()
+        #
+        oidc_state = flask.session["auth_oidc"].pop(state_uuid)
+        flask.session.modified = True
+        #
+        target_token = oidc_state.get("target_token", "")
+        #
+        return auth.logout_success_redirect(target_token)
