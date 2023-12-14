@@ -17,15 +17,10 @@
 
 """ Module """
 
-import json
-import time
-import uuid
-import base64
 import urllib
-import textwrap
 import datetime
 
-import requests
+import requests  # pylint: disable=E0401
 import flask  # pylint: disable=E0611,E0401
 import jwt  # pylint: disable=E0401
 
@@ -33,7 +28,7 @@ from pylon.core.tools import log  # pylint: disable=E0611,E0401
 from pylon.core.tools import web  # pylint: disable=E0611,E0401
 from pylon.core.tools import module  # pylint: disable=E0611,E0401
 
-from tools import auth
+from tools import auth  # pylint: disable=E0401
 
 from . import tools
 
@@ -44,6 +39,17 @@ class Module(module.ModuleModel):
     def __init__(self, context, descriptor):
         self.context = context
         self.descriptor = descriptor
+
+    def _get_url(self, endpoint):
+        url_mode = self.descriptor.config.get("url_mode", "default")
+        #
+        if url_mode == "request":
+            return f'{flask.request.host_url.rstrip("/")}{flask.url_for(endpoint)}'
+        #
+        if url_mode == "external":
+            return flask.url_for(endpoint, _external=True)
+        #
+        return flask.url_for(endpoint)  # default
 
     #
     # Module
@@ -66,7 +72,7 @@ class Module(module.ModuleModel):
         # metadata = requests.get(self.descriptor.config["issuer"]).json()
         # log.info("[Metadata]: %s", metadata)
 
-    def deinit(self):  # pylint: disable=R0201
+    def deinit(self):
         """ De-init module """
         log.info("De-initializing module")
         # Unregister auth provider
@@ -82,14 +88,14 @@ class Module(module.ModuleModel):
         target_token = flask.request.args.get("target_to", "")
         #
         if "auth_oidc" not in flask.session:
-            flask.session["auth_oidc"] = dict()
+            flask.session["auth_oidc"] = {}
         #
         while True:
             state_uuid, target_state = tools.generate_state_id(self)
             if state_uuid not in flask.session["auth_oidc"]:
                 break
         #
-        flask.session["auth_oidc"][state_uuid] = dict()
+        flask.session["auth_oidc"][state_uuid] = {}
         flask.session["auth_oidc"][state_uuid]["target_token"] = target_token
         flask.session.modified = True
         #
@@ -107,7 +113,7 @@ class Module(module.ModuleModel):
                 },
                 {
                     "name": "redirect_uri",
-                    "value": flask.url_for("auth_oidc.login_callback"),
+                    "value": self._get_url("auth_oidc.login_callback"),
                 },
                 {
                     "name": "scope",
@@ -121,7 +127,7 @@ class Module(module.ModuleModel):
         )
 
     @web.route("/login_callback")
-    def login_callback(self):  # pylint: disable=R0912,R0914,R0915
+    def login_callback(self):  # pylint: disable=R0912,R0914,R0915,R0911
         """ Login callback """
         log.info("GET arguments: %s", flask.request.args)
         #
@@ -156,7 +162,7 @@ class Module(module.ModuleModel):
                 data={
                     "grant_type": "authorization_code",
                     "code": oidc_code,
-                    "redirect_uri": flask.url_for("auth_oidc.login_callback"),
+                    "redirect_uri": self._get_url("auth_oidc.login_callback"),
                 },
                 auth=(
                     self.descriptor.config["client_id"],
@@ -213,27 +219,9 @@ class Module(module.ModuleModel):
                 self.context.rpc_manager.call.auth_get_user_from_provider(
                     auth_name
                 )["id"]
-        except:
+        except:  # pylint: disable=W0702
             auth_user_id = None
         #
-        d = {'done': True,
-             'error': '',
-             'expiration': datetime.datetime(2023, 1, 31, 11, 43, 39),
-             'provider': 'oidc',
-             'provider_attr': {
-                 'nameid': 'admin',
-                 'attributes': {
-                     'jti': '46a62227-849d-4bb7-86a9-fe4f402371f6', 'exp': 1675165419,
-                     'nbf': 0, 'iat': 1675154619,
-                     'iss': 'http://192.168.100.13/auth/realms/carrier', 'aud': 'carrier-oidc',
-                     'sub': '31f6b97d-4e42-4816-b4bc-4e5b1bc3b181', 'typ': 'ID',
-                     'azp': 'carrier-oidc', 'auth_time': 1675154619,
-                     'session_state': '73a629cd-6b2d-4049-aef0-16f0252f3e41', 'acr': '1',
-                     'email_verified': True, 'groups': ['/BSS', '/Carrier', '/EPAM'],
-                     'preferred_username': 'admin'},
-                 'sessionindex': 'eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJyTVBZMW1hT1hCX3FZbERWNXVaa0xlZjd4MzZnRktzUmVIVUNUZ2VZTG5jIn0.eyJqdGkiOiI0NmE2MjIyNy04NDlkLTRiYjctODZhOS1mZTRmNDAyMzcxZjYiLCJleHAiOjE2NzUxNjU0MTksIm5iZiI6MCwiaWF0IjoxNjc1MTU0NjE5LCJpc3MiOiJodHRwOi8vMTkyLjE2OC4xMDAuMTMvYXV0aC9yZWFsbXMvY2FycmllciIsImF1ZCI6ImNhcnJpZXItb2lkYyIsInN1YiI6IjMxZjZiOTdkLTRlNDItNDgxNi1iNGJjLTRlNWIxYmMzYjE4MSIsInR5cCI6IklEIiwiYXpwIjoiY2Fycmllci1vaWRjIiwiYXV0aF90aW1lIjoxNjc1MTU0NjE5LCJzZXNzaW9uX3N0YXRlIjoiNzNhNjI5Y2QtNmIyZC00MDQ5LWFlZjAtMTZmMDI1MmYzZTQxIiwiYWNyIjoiMSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJncm91cHMiOlsiL0JTUyIsIi9DYXJyaWVyIiwiL0VQQU0iXSwicHJlZmVycmVkX3VzZXJuYW1lIjoiYWRtaW4ifQ.WNvZbvqnLOyLsHNwTdd6QwPus_1k342cOQyTg9I0Cs8eddF7fP_-RmnsJ_icjN_v379mih5HvryxMWVhkL7YNItGg_y3Y-E7e26XxifCOmHIorZvEI3fY57fzSIDommzWni8OWuxJSoH9lmTXsFTnMgtLXJV4FJ9XLXLgnh1edc2pA2sC8yl6QIgG8aQUO834LTBNT2c6xkYZrYU41tsT31SdZ_5ooknOnen4UaR17QC3JGS5TQmWtgWgbKfgel0UG_bWpNByqeQMeFLyVl34a1ZapC4BBS6sGusAGwMSX6ZJaYvfsHkmk1DLWURpzOOIAOKLiHmPGenH_qz8EIpuA'},
-             'user_id': None
-             }
         auth_ctx = auth.get_auth_context()
         auth_ctx["done"] = auth_ok
         auth_ctx["error"] = ""
@@ -256,20 +244,20 @@ class Module(module.ModuleModel):
         auth_ctx = auth.get_auth_context()
         #
         if "auth_oidc" not in flask.session:
-            flask.session["auth_oidc"] = dict()
+            flask.session["auth_oidc"] = {}
         #
         while True:
             state_uuid, target_state = tools.generate_state_id(self)
             if state_uuid not in flask.session["auth_oidc"]:
                 break
         #
-        flask.session["auth_oidc"][state_uuid] = dict()
+        flask.session["auth_oidc"][state_uuid] = {}
         flask.session["auth_oidc"][state_uuid]["target_token"] = target_token
         flask.session.modified = True
         #
         url_params = urllib.parse.urlencode({
             "id_token_hint": auth_ctx["provider_attr"].get("sessionindex", ""),
-            "post_logout_redirect_uri": flask.url_for("auth_oidc.logout_callback"),
+            "post_logout_redirect_uri": self._get_url("auth_oidc.logout_callback"),
             "state": target_state,
         })
         return flask.redirect(f'{self.descriptor.config["end_session_endpoint"]}?{url_params}')
@@ -284,7 +272,7 @@ class Module(module.ModuleModel):
         #         },
         #         {
         #             "name": "post_logout_redirect_uri",
-        #             "value": flask.url_for("auth_oidc.logout_callback"),
+        #             "value": self._get_url("auth_oidc.logout_callback"),
         #         },
         #         {
         #             "name": "state",
