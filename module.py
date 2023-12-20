@@ -255,31 +255,40 @@ class Module(module.ModuleModel):
         flask.session["auth_oidc"][state_uuid]["target_token"] = target_token
         flask.session.modified = True
         #
-        url_params = urllib.parse.urlencode({
-            "id_token_hint": auth_ctx["provider_attr"].get("sessionindex", ""),
-            "post_logout_redirect_uri": self._get_url("auth_oidc.logout_callback"),
-            "state": target_state,
-        })
-        return flask.redirect(f'{self.descriptor.config["end_session_endpoint"]}?{url_params}')
+        logout_mode = self.descriptor.config.get("logout_mode", "get")
         #
-        # return self.descriptor.render_template(
-        #     "redirect.html",
-        #     action=self.descriptor.config["end_session_endpoint"],
-        #     parameters=[
-        #         {
-        #             "name": "id_token_hint",
-        #             "value": auth_ctx["provider_attr"].get("sessionindex", ""),
-        #         },
-        #         {
-        #             "name": "post_logout_redirect_uri",
-        #             "value": self._get_url("auth_oidc.logout_callback"),
-        #         },
-        #         {
-        #             "name": "state",
-        #             "value": target_state,
-        #         },
-        #     ],
-        # )
+        if logout_mode == "get":
+            url_params = urllib.parse.urlencode({
+                "id_token_hint": auth_ctx["provider_attr"].get("sessionindex", ""),
+                "post_logout_redirect_uri": self._get_url("auth_oidc.logout_callback"),
+                "state": target_state,
+            })
+            return flask.redirect(f'{self.descriptor.config["end_session_endpoint"]}?{url_params}')
+        #
+        if logout_mode == "post":
+            return self.descriptor.render_template(
+                "redirect.html",
+                action=self.descriptor.config["end_session_endpoint"],
+                parameters=[
+                    {
+                        "name": "id_token_hint",
+                        "value": auth_ctx["provider_attr"].get("sessionindex", ""),
+                    },
+                    {
+                        "name": "post_logout_redirect_uri",
+                        "value": self._get_url("auth_oidc.logout_callback"),
+                    },
+                    {
+                        "name": "state",
+                        "value": target_state,
+                    },
+                ],
+            )
+        #
+        if logout_mode == "local":
+            return auth.logout_success_redirect(target_token)
+        #
+        return auth.access_denied_reply()
 
     @web.route("/logout_callback")
     def logout_callback(self):  # pylint: disable=R0912,R0914,R0915
