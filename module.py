@@ -68,9 +68,24 @@ class Module(module.ModuleModel):
             login_route="auth_oidc.login",
             logout_route="auth_oidc.logout",
         )
-        #
-        # metadata = requests.get(self.descriptor.config["issuer"]).json()
-        # log.info("[Metadata]: %s", metadata)
+        # Use metadata endpoint if set in config
+        metadata_endpoint = self.descriptor.config.get("metadata_endpoint", "").strip()
+        if metadata_endpoint:
+            log.info("Getting metadata")
+            metadata = requests.get(
+                metadata_endpoint,
+                verify=self.descriptor.config.get("metadata_endpoint_verify", True),
+            ).json()
+            #
+            for endpoint in [
+                "authorization_endpoint",
+                "token_endpoint",
+                "userinfo_endpoint",
+                "end_session_endpoint",
+            ]:
+                if endpoint in metadata:
+                    log.info("Using %s: %s", endpoint, metadata[endpoint])
+                    self.descriptor.config[endpoint] = metadata[endpoint]
 
     def deinit(self):
         """ De-init module """
