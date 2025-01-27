@@ -172,19 +172,35 @@ class Module(module.ModuleModel):
         oidc_code = flask.request.args["code"]
         #
         try:
-            oidc_token = requests.post(
-                self.descriptor.config["token_endpoint"],
-                data={
-                    "grant_type": "authorization_code",
-                    "code": oidc_code,
-                    "redirect_uri": self._get_url("auth_oidc.login_callback"),
-                },
-                auth=(
-                    self.descriptor.config["client_id"],
-                    self.descriptor.config["client_secret"],
-                ),
-                verify=self.descriptor.config.get("token_endpoint_verify", True),
-            ).json()
+            token_endpoint_auth = self.descriptor.config.get("token_endpoint_auth", "basic")
+            if token_endpoint_auth == "basic":
+                oidc_token = requests.post(
+                    self.descriptor.config["token_endpoint"],
+                    data={
+                        "grant_type": "authorization_code",
+                        "code": oidc_code,
+                        "redirect_uri": self._get_url("auth_oidc.login_callback"),
+                    },
+                    auth=(
+                        self.descriptor.config["client_id"],
+                        self.descriptor.config["client_secret"],
+                    ),
+                    verify=self.descriptor.config.get("token_endpoint_verify", True),
+                ).json()
+            elif token_endpoint_auth == "data":
+                oidc_token = requests.post(
+                    self.descriptor.config["token_endpoint"],
+                    data={
+                        "grant_type": "authorization_code",
+                        "client_id": self.descriptor.config["client_id"],
+                        "client_secret": self.descriptor.config["client_secret"],
+                        "code": oidc_code,
+                        "redirect_uri": self._get_url("auth_oidc.login_callback"),
+                    },
+                    verify=self.descriptor.config.get("token_endpoint_verify", True),
+                ).json()
+            else:
+                raise ValueError("Invalid token_endpoint_auth")
         except:  # pylint: disable=W0702
             log.error("Failed to get token")
             return auth.access_denied_reply()
