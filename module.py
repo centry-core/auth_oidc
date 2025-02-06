@@ -223,6 +223,11 @@ class Module(module.ModuleModel):
             log.error("Invalid ID token: no sub")
             return auth.access_denied_reply()
         #
+        if self.descriptor.config.get("require_email_verified", False):
+            if "email_verified" not in id_data or not id_data["email_verified"]:
+                log.error("Email verification required and email is not verified")
+                return auth.access_denied_reply()
+        #
         oidc_sub = id_data["sub"]
         #
         auth_ok = True
