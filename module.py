@@ -245,7 +245,11 @@ class Module(module.ModuleModel):
         #
         auth_sessionindex = oidc_token["id_token"]
         #
-        if "exp" not in id_data:
+        exp_override = self.descriptor.config.get("expiration_override", None)
+        #
+        if exp_override is not None:
+            auth_exp = datetime.datetime.now() + datetime.timedelta(seconds=int(exp_override))
+        elif "exp" not in id_data:
             auth_exp = datetime.datetime.now() + datetime.timedelta(seconds=86400)  # 24h
         else:
             auth_exp = datetime.datetime.fromtimestamp(id_data["exp"])
