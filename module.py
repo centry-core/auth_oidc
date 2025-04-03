@@ -51,6 +51,26 @@ class Module(module.ModuleModel):
         #
         return flask.url_for(endpoint)  # default
 
+    def _get_metadata(self):
+        metadata_endpoint = self.descriptor.config.get("metadata_endpoint", "").strip()
+        if metadata_endpoint:
+            log.info("Getting metadata")
+            #
+            metadata = requests.get(
+                metadata_endpoint,
+                verify=self.descriptor.config.get("metadata_endpoint_verify", True),
+            ).json()
+            #
+            for endpoint in [
+                "authorization_endpoint",
+                "token_endpoint",
+                "userinfo_endpoint",
+                "end_session_endpoint",
+            ]:
+                if endpoint in metadata:
+                    log.info("Using %s: %s", endpoint, metadata[endpoint])
+                    self.descriptor.config[endpoint] = metadata[endpoint]
+
     #
     # Module
     #
@@ -69,23 +89,13 @@ class Module(module.ModuleModel):
             logout_route="auth_oidc.logout",
         )
         # Use metadata endpoint if set in config
-        metadata_endpoint = self.descriptor.config.get("metadata_endpoint", "").strip()
-        if metadata_endpoint:
-            log.info("Getting metadata")
-            metadata = requests.get(
-                metadata_endpoint,
-                verify=self.descriptor.config.get("metadata_endpoint_verify", True),
-            ).json()
-            #
-            for endpoint in [
-                "authorization_endpoint",
-                "token_endpoint",
-                "userinfo_endpoint",
-                "end_session_endpoint",
-            ]:
-                if endpoint in metadata:
-                    log.info("Using %s: %s", endpoint, metadata[endpoint])
-                    self.descriptor.config[endpoint] = metadata[endpoint]
+        self._get_metadata()
+
+    def reconfig(self):
+        """ Re-config module """
+        log.info("Re-configuring module")
+        # Re-get metadata
+        self._get_metadata()
 
     def deinit(self):
         """ De-init module """
