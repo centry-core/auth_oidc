@@ -39,7 +39,9 @@ class Module(module.ModuleModel):
         log.info("Initializing module")
         # Init
         self.descriptor.init_all(
-            url_prefix=self.descriptor.config.get("url_prefix", None)
+            url_prefix=auth_core.get_relative_url_prefix(
+                self.descriptor, self.descriptor.config.get("url_prefix", None)
+            ),
         )
         # Register auth provider
         auth_core.register_auth_provider(
