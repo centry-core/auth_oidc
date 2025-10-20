@@ -64,32 +64,39 @@ class Route:  # pylint: disable=E1101,R0903
         flask.session.modified = True
         #
         target_response_type = self.descriptor.config.get("target_response_type", "code")
+        target_parameters = [
+            {
+                "name": "response_type",
+                "value": target_response_type,
+            },
+            {
+                "name": "client_id",
+                "value": self.descriptor.config["client_id"],
+            },
+            {
+                "name": "redirect_uri",
+                "value": self.get_url("auth_oidc.login_callback"),
+            },
+            {
+                "name": "scope",
+                "value": "openid profile email",
+            },
+            {
+                "name": "state",
+                "value": target_state,
+            },
+        ]
+        #
+        if target_response_type == "id_token":
+            target_parameters.append({
+                "name": "response_mode",
+                "value": "form_post",
+            })
         #
         return self.descriptor.render_template(
             "redirect.html",
             action=self.descriptor.config["authorization_endpoint"],
-            parameters=[
-                {
-                    "name": "response_type",
-                    "value": target_response_type,
-                },
-                {
-                    "name": "client_id",
-                    "value": self.descriptor.config["client_id"],
-                },
-                {
-                    "name": "redirect_uri",
-                    "value": self.get_url("auth_oidc.login_callback"),
-                },
-                {
-                    "name": "scope",
-                    "value": "openid profile email",
-                },
-                {
-                    "name": "state",
-                    "value": target_state,
-                },
-            ],
+            parameters=target_parameters,
         )
 
     @web.route("/login_callback")
