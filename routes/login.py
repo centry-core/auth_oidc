@@ -99,7 +99,7 @@ class Route:  # pylint: disable=E1101,R0903
             parameters=target_parameters,
         )
 
-    @web.route("/login_callback")
+    @web.route("/login_callback", methods=["GET", "POST"])
     def login_callback(self):  # pylint: disable=R0912,R0914,R0915,R0911
         """ Login callback """
         if flask.request.method == "POST":
