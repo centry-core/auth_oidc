@@ -191,7 +191,11 @@ class Route:  # pylint: disable=E1101,R0903
             id_token = args["id_token"]
         #
         if self.rsa_public_key is not None:
-            id_data = jwt.decode(id_token, self.rsa_public_key, algorithms=["RS256"])
+            id_data = jwt.decode(
+                id_token, self.rsa_public_key,
+                audience=self.descriptor.config["client_id"],
+                algorithms=["RS256"],
+            )
         else:
             id_data = jwt.decode(id_token, options={"verify_signature": False})
         #
