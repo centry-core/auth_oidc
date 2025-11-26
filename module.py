@@ -24,6 +24,8 @@ import requests  # pylint: disable=E0401
 import flask  # pylint: disable=E0611,E0401
 import jwt  # pylint: disable=E0401
 
+from cryptography.hazmat.primitives import serialization  # pylint: disable=E0401
+
 from pylon.core.tools import log  # pylint: disable=E0611,E0401
 from pylon.core.tools import web  # pylint: disable=E0611,E0401
 from pylon.core.tools import module  # pylint: disable=E0611,E0401
@@ -39,6 +41,8 @@ class Module(module.ModuleModel):
     def __init__(self, context, descriptor):
         self.context = context
         self.descriptor = descriptor
+        #
+        self.rsa_public_key = None
 
     def _get_url(self, endpoint):
         url_mode = self.descriptor.config.get("url_mode", "default")
@@ -78,6 +82,13 @@ class Module(module.ModuleModel):
     def init(self):
         """ Init module """
         log.info("Initializing module")
+        # Load JWT key
+        if "jwt_public_key" in self.descriptor.config:
+            log.info("Loading public RSA key")
+            #
+            self.rsa_public_key = serialization.load_pem_public_key(
+                self.descriptor.config.get("jwt_public_key").encode(),
+            )
         # Init blueprint
         self.descriptor.init_blueprint(
             url_prefix=self.descriptor.config.get("url_prefix", None)
@@ -124,43 +135,57 @@ class Module(module.ModuleModel):
         flask.session["auth_oidc"][state_uuid]["target_token"] = target_token
         flask.session.modified = True
         #
+        target_response_type = self.descriptor.config.get("target_response_type", "code")
+        target_parameters = [
+            {
+                "name": "response_type",
+                "value": target_response_type,
+            },
+            {
+                "name": "client_id",
+                "value": self.descriptor.config["client_id"],
+            },
+            {
+                "name": "redirect_uri",
+                "value": self._get_url("auth_oidc.login_callback"),
+            },
+            {
+                "name": "scope",
+                "value": "openid profile email",
+            },
+            {
+                "name": "state",
+                "value": target_state,
+            },
+        ]
+        #
+        if target_response_type == "id_token":
+            target_parameters.append({
+                "name": "response_mode",
+                "value": "form_post",
+            })
+        #
         return self.descriptor.render_template(
             "redirect.html",
             action=self.descriptor.config["authorization_endpoint"],
-            parameters=[
-                {
-                    "name": "response_type",
-                    "value": "code",
-                },
-                {
-                    "name": "client_id",
-                    "value": self.descriptor.config["client_id"],
-                },
-                {
-                    "name": "redirect_uri",
-                    "value": self._get_url("auth_oidc.login_callback"),
-                },
-                {
-                    "name": "scope",
-                    "value": "openid profile email",
-                },
-                {
-                    "name": "state",
-                    "value": target_state,
-                },
-            ],
+            parameters=target_parameters,
         )
 
-    @web.route("/login_callback")
+    @web.route("/login_callback", methods=["GET", "POST"])
     def login_callback(self):  # pylint: disable=R0912,R0914,R0915,R0911
         """ Login callback """
-        log.info("GET arguments: %s", flask.request.args)
+        if flask.request.method == "POST":
+            args = flask.request.form
+        else:
+            args = flask.request.args
         #
-        if "state" not in flask.request.args:
+        log.debug("Callback arguments: %s", args)
+        #
+        if "state" not in args:
             log.error("No state in OIDC callback")
             return auth.access_denied_reply()
         #
-        target_state = flask.request.args["state"]
+        target_state = args["state"]
         #
         try:
             state_uuid = tools.get_state_id(self, target_state)
@@ -175,57 +200,76 @@ class Module(module.ModuleModel):
         #
         target_token = oidc_state.get("target_token", "")
         #
-        if "code" not in flask.request.args:
-            log.error("No code in OIDC callback")
-            return auth.access_denied_reply()
+        target_response_type = self.descriptor.config.get("target_response_type", "code")
         #
-        oidc_code = flask.request.args["code"]
+        if target_response_type == "code":
+            if "code" not in args:
+                log.error("No code in OIDC callback")
+                return auth.access_denied_reply()
+            #
+            oidc_code = args["code"]
+            #
+            try:
+                token_endpoint_auth = self.descriptor.config.get("token_endpoint_auth", "basic")
+                if token_endpoint_auth == "basic":
+                    oidc_token = requests.post(
+                        self.descriptor.config["token_endpoint"],
+                        data={
+                            "grant_type": "authorization_code",
+                            "code": oidc_code,
+                            "redirect_uri": self._get_url("auth_oidc.login_callback"),
+                        },
+                        auth=(
+                            self.descriptor.config["client_id"],
+                            self.descriptor.config["client_secret"],
+                        ),
+                        verify=self.descriptor.config.get("token_endpoint_verify", True),
+                    ).json()
+                elif token_endpoint_auth == "data":
+                    oidc_token = requests.post(
+                        self.descriptor.config["token_endpoint"],
+                        data={
+                            "grant_type": "authorization_code",
+                            "client_id": self.descriptor.config["client_id"],
+                            "client_secret": self.descriptor.config["client_secret"],
+                            "code": oidc_code,
+                            "redirect_uri": self._get_url("auth_oidc.login_callback"),
+                        },
+                        verify=self.descriptor.config.get("token_endpoint_verify", True),
+                    ).json()
+                else:
+                    raise ValueError("Invalid token_endpoint_auth")
+            except:  # pylint: disable=W0702
+                log.error("Failed to get token")
+                return auth.access_denied_reply()
+            #
+            log.debug("Token: %s", oidc_token)
+            #
+            if "error" in oidc_token:
+                log.error("Error in OIDC token: %s", oidc_token.get("error_description", "unknown"))
+                return auth.access_denied_reply()
+            #
+            if "id_token" not in oidc_token:
+                log.error("Invalid OIDC token: no id_tokeb")
+                return auth.access_denied_reply()
+            #
+            id_token = oidc_token["id_token"]
         #
-        try:
-            token_endpoint_auth = self.descriptor.config.get("token_endpoint_auth", "basic")
-            if token_endpoint_auth == "basic":
-                oidc_token = requests.post(
-                    self.descriptor.config["token_endpoint"],
-                    data={
-                        "grant_type": "authorization_code",
-                        "code": oidc_code,
-                        "redirect_uri": self._get_url("auth_oidc.login_callback"),
-                    },
-                    auth=(
-                        self.descriptor.config["client_id"],
-                        self.descriptor.config["client_secret"],
-                    ),
-                    verify=self.descriptor.config.get("token_endpoint_verify", True),
-                ).json()
-            elif token_endpoint_auth == "data":
-                oidc_token = requests.post(
-                    self.descriptor.config["token_endpoint"],
-                    data={
-                        "grant_type": "authorization_code",
-                        "client_id": self.descriptor.config["client_id"],
-                        "client_secret": self.descriptor.config["client_secret"],
-                        "code": oidc_code,
-                        "redirect_uri": self._get_url("auth_oidc.login_callback"),
-                    },
-                    verify=self.descriptor.config.get("token_endpoint_verify", True),
-                ).json()
-            else:
-                raise ValueError("Invalid token_endpoint_auth")
-        except:  # pylint: disable=W0702
-            log.error("Failed to get token")
-            return auth.access_denied_reply()
+        else:  # target_response_type == id_token
+            if "id_token" not in args:
+                log.error("No id_token in OIDC callback")
+                return auth.access_denied_reply()
+            #
+            id_token = args["id_token"]
         #
-        log.info("Token: %s", oidc_token)
-        #
-        if "error" in oidc_token:
-            log.error("Error in OIDC token: %s", oidc_token.get("error_description", "unknown"))
-            return auth.access_denied_reply()
-        #
-        if "id_token" not in oidc_token:
-            log.error("Invalid OIDC token: no id_tokeb")
-            return auth.access_denied_reply()
-        #
-        id_data = jwt.decode(oidc_token["id_token"], options={"verify_signature": False})
+        if self.rsa_public_key is not None:
+            id_data = jwt.decode(
+                id_token, self.rsa_public_key,
+                audience=self.descriptor.config["client_id"],
+                algorithms=["RS256"],
+            )
+        else:
+            id_data = jwt.decode(id_token, options={"verify_signature": False})
         #
         log.info("ID data: %s", id_data)
         #
@@ -253,7 +297,7 @@ class Module(module.ModuleModel):
         #
         # log.info("Auth attributes: %s", auth_attributes)
         #
-        auth_sessionindex = oidc_token["id_token"]
+        auth_sessionindex = id_token
         #
         exp_override = self.descriptor.config.get("expiration_override", None)
         #
