@@ -17,6 +17,7 @@
 
 """ Route """
 
+import urllib
 import datetime
 
 import requests  # pylint: disable=E0401
@@ -92,6 +93,15 @@ class Route:  # pylint: disable=E1101,R0903
                 "name": "response_mode",
                 "value": "form_post",
             })
+        #
+        login_mode = self.descriptor.config.get("login_mode", "post")
+        #
+        if login_mode == "get":
+            target_params_dict = {item["name"]: item["value"] for item in target_parameters}
+            url_params = urllib.parse.urlencode(target_params_dict)
+            return flask.redirect(
+                f'{self.descriptor.config["authorization_endpoint"]}?{url_params}'
+            )
         #
         return self.descriptor.render_template(
             "redirect.html",
