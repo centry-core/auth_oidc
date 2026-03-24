@@ -79,7 +79,7 @@ class Route:  # pylint: disable=E1101,R0903
             },
             {
                 "name": "scope",
-                "value": "openid profile email",
+                "value": self.descriptor.config.get("target_scope", "openid profile email"),
             },
             {
                 "name": "state",
